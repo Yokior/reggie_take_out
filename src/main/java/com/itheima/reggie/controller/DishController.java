@@ -13,10 +13,12 @@ import com.itheima.reggie.service.DishService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 菜品管理
@@ -35,6 +37,8 @@ public class DishController
     @Autowired
     private CategoryService categoryService;
 
+    @Autowired
+    private RedisTemplate redisTemplate;
 
     /**
      * 新增菜品
@@ -45,8 +49,11 @@ public class DishController
     @PostMapping
     public R<String> save(@RequestBody DishDto dishDto)
     {
+        String key = "dish_" + dishDto.getCategoryId() + "_" + dishDto.getStatus();
         log.info(dishDto.toString());
         dishService.saveWithFlavor(dishDto);
+        // 删除缓存数据
+        redisTemplate.delete(key);
         return R.success("新增菜品成功");
     }
 
@@ -113,8 +120,11 @@ public class DishController
     @PutMapping
     public R<String> update(@RequestBody DishDto dishDto)
     {
+        String key = "dish_" + dishDto.getCategoryId() + "_" + dishDto.getStatus();
         log.info(dishDto.toString());
         dishService.updateWithFlavor(dishDto);
+        // 清除缓存数据
+        redisTemplate.delete(key);
         return R.success("修改菜品成功");
     }
 
@@ -141,6 +151,19 @@ public class DishController
     @GetMapping("/list")
     public R<List<DishDto>> list(Dish dish)
     {
+        List<DishDto> dishDtoList = new ArrayList<>();
+        // 从redis中查询数据
+        String key = "dish_" + dish.getCategoryId() + "_" + dish.getStatus();
+        dishDtoList = (List<DishDto>) redisTemplate.opsForValue().get(key);
+
+        if (dishDtoList != null)
+        {
+            // 如果查到 直接返回 无需调用数据库
+            return R.success(dishDtoList);
+        }
+
+        // 没查到 查询数据库
+
         LambdaQueryWrapper<Dish> lqw = new LambdaQueryWrapper<>();
         lqw.eq(dish.getCategoryId() != null,Dish::getCategoryId,dish.getCategoryId());
         // 查询状态为1的 起售状态
@@ -150,7 +173,7 @@ public class DishController
         List<Dish> dishList = dishService.list(lqw);
 
         // 补充缺失数据
-        List<DishDto> dishDtoList = new ArrayList<>();
+        dishDtoList = new ArrayList<>();
 
         for (Dish dish1 : dishList)
         {
@@ -173,6 +196,9 @@ public class DishController
             // 存入集合
             dishDtoList.add(dishDto);
         }
+
+        // 将查到的数据缓存进redis
+        redisTemplate.opsForValue().set(key,dishDtoList,60, TimeUnit.MINUTES);
 
 
 
